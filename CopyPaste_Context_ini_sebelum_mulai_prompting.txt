@@ -1,0 +1,136 @@
+# PROJECT CONTEXT: Bank Soal Fasilkom UI
+
+## 1. Instruksi Wajib untuk AI (Baca Sebelum Menulis Kode)
+Kamu adalah asisten pemrograman untuk proyek kelompok mahasiswa Fasilkom UI. Patuhi aturan ketat berikut:
+1. **Jangan ubah Tech Stack:** Gunakan murni **Django (MVT)**, **Django Templates**, dan **Tailwind CSS via CDN**. Dilarang menyarankan React, Vue, Next.js, atau Django REST Framework (API JSON).
+2. **Jangan ubah Struktur Database:** Gunakan nama model, nama *field*, dan `related_name` persis seperti yang tertulis di bagian `models.py` di bawah ini.
+3. **Pisahkan File Views:** Jangan menaruh semua fungsi di `views.py`. Tulis kode sesuai pembagian file masing-masing anggota agar tidak terjadi *merge conflict* di GitHub.
+4. **Keamanan Role:** Fitur tambah, edit, dan hapus soal (`Soal`) HANYA boleh diakses oleh user yang memiliki `request.user.profile.role == 'ASDOS'`.
+
+---
+
+## 2. Deskripsi Aplikasi & Alur Data
+Website Bank Soal internal Fasilkom UI antara **Asdos** dan **Mahasiswa**:
+- **Autentikasi:** Login menggunakan `sso.ui.ac.id` (CAS). Saat tahap *development*, gunakan halaman login simulasi dulu. Sistem otomatis mengecek NPM ke tabel `WhitelistAsdos`; jika terdaftar, role otomatis menjadi `ASDOS`, jika tidak maka menjadi `MAHASISWA`.
+- **Hierarki Navigasi:** `Semester` (1, 2, dst.) -> `MataKuliah` (DDP 1, Kalkulus 1, dll.) -> Filter `Kategori` (Pre-Class, Post-Class, Asistensi, UTS, UAS, Lainnya) -> Urutan `Tahun` terbaru (`2026`, `2025`, `2024`).
+- **Penyimpanan File:** Menggunakan link URL (seperti Google Drive) pada `file_url` dan `pembahasan_url` agar file tidak hilang saat *deploy* di server gratis.
+
+---
+
+## 3. Struktur Folder & Pembagian Tugas (3 Anggota)
+Nama app utama Django adalah `banksoal`.
+
+```text
+project_root/
+├── CONTEXT.md               <-- File panduan ini
+├── manage.py
+├── config/                  <-- Folder project utama Django (settings.py, urls.py)
+└── banksoal/                <-- App utama
+    ├── models.py            <-- [Anggota 1] Database schema (LOCKED)
+    ├── admin.py             <-- [Anggota 1] Setup Django Admin
+    ├── urls.py              <-- [Anggota 1] Routing URL seluruh halaman
+    ├── views_auth.py        <-- [Anggota 1] Login simulasi, Logout, & SSO UI
+    ├── views_katalog.py     <-- [Anggota 2] Beranda, daftar matkul, detail & filter soal
+    ├── views_asdos.py       <-- [Anggota 3] Dashboard asdos, CRUD (tambah/edit/hapus) soal
+    ├── forms.py             <-- [Anggota 3] ModelForm untuk input/edit Soal
+    └── templates/
+        └── banksoal/
+            ├── base.html            <-- [Anggota 2] Navbar, Footer, & Tailwind CDN
+            ├── login.html           <-- [Anggota 1] Halaman login
+            ├── home.html            <-- [Anggota 2] Pilih Semester
+            ├── daftar_matkul.html   <-- [Anggota 2] Daftar Matkul per Semester
+            ├── detail_matkul.html   <-- [Anggota 2] Daftar Soal + Tab Kategori + Sort Tahun
+            ├── dashboard_asdos.html <-- [Anggota 3] Tabel kelola soal milik Asdos
+            └── form_soal.html       <-- [Anggota 3] Form tambah & edit soal
+```
+
+---
+
+## 4. Schema Database (`banksoal/models.py`)
+
+```python
+from django.db import models
+from django.contrib.auth.models import User
+
+
+class WhitelistAsdos(models.Model):
+    npm = models.CharField(max_length=15, unique=True)
+    nama_catatan = models.CharField(max_length=100, blank=True, help_text="Contoh: Asdos DDP 1 - Budi")
+
+    class Meta:
+        verbose_name_plural = "Whitelist Asdos"
+
+    def __str__(self):
+        return f"{self.npm} - {self.nama_catatan}"
+
+
+class UserProfile(models.Model):
+    ROLE_CHOICES = [
+        ('MAHASISWA', 'Mahasiswa'),
+        ('ASDOS', 'Asdos'),
+    ]
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    npm = models.CharField(max_length=15, unique=True)
+    nama_lengkap = models.CharField(max_length=150)
+    role = models.CharField(max_length=15, choices=ROLE_CHOICES, default='MAHASISWA')
+
+    @property
+    def is_asdos(self):
+        return self.role == 'ASDOS'
+
+    def __str__(self):
+        return f"{self.nama_lengkap} ({self.npm}) - {self.role}"
+
+
+class Semester(models.Model):
+    nama = models.CharField(max_length=50, help_text="Contoh: Semester 1")
+    urutan = models.PositiveIntegerField(unique=True, help_text="Angka urutan: 1, 2, 3, dst.")
+
+    class Meta:
+        ordering = ['urutan']
+
+    def __str__(self):
+        return self.nama
+
+
+class MataKuliah(models.Model):
+    semester = models.ForeignKey(Semester, on_delete=models.CASCADE, related_name='mata_kuliah')
+    kode_mk = models.CharField(max_length=20, help_text="Contoh: CSGE601020")
+    nama_mk = models.CharField(max_length=100, help_text="Contoh: Dasar-Dasar Pemrograman 1")
+
+    class Meta:
+        ordering = ['nama_mk']
+        verbose_name_plural = "Mata Kuliah"
+
+    def __str__(self):
+        return f"{self.kode_mk} - {self.nama_mk}"
+
+
+class Soal(models.Model):
+    KATEGORI_CHOICES = [
+        ('PRE_CLASS', 'Pre-Class Quiz'),
+        ('POST_CLASS', 'Post-Class Quiz'),
+        ('ASISTENSI', 'Latihan Asistensi / Lab'),
+        ('UTS', 'UTS'),
+        ('UAS', 'UAS'),
+        ('LAINNYA', 'Lainnya'),
+    ]
+
+    mata_kuliah = models.ForeignKey(MataKuliah, on_delete=models.CASCADE, related_name='daftar_soal')
+    judul = models.CharField(max_length=200, help_text="Contoh: Latihan Asistensi 4 - Rekursi")
+    kategori = models.CharField(max_length=20, choices=KATEGORI_CHOICES)
+    tahun = models.PositiveIntegerField(default=2026, help_text="Tahun ajaran soal, misal: 2024, 2025, 2026")
+    file_url = models.URLField(help_text="Link PDF Soal (Google Drive / Cloud)")
+    pembahasan_url = models.URLField(blank=True, null=True, help_text="Opsional: Link PDF Pembahasan")
+    deskripsi = models.TextField(blank=True, help_text="Catatan tambahan dari asdos (opsional)")
+    uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='soal_diupload')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-tahun', '-created_at']
+        verbose_name_plural = "Soal"
+
+    def __str__(self):
+        return f"[{self.tahun}] {self.mata_kuliah.nama_mk} - {self.judul}"
+```
